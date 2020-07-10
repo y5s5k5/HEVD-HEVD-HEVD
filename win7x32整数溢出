@@ -8,7 +8,7 @@ static VOID ShellCode()
 
 	__asm
 	{
-			int 3
+			//int 3
 			pop edi
 			pop esi
 			pop ebx
