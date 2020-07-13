@@ -26,7 +26,7 @@ mov r12,0
 mov r15,0
 mov r14,0
 mov rsi,00000000c00000bbh
-mov rdi,4d
+mov rdi,4dh
 mov rdx,0
 mov rbx,3
 ret
