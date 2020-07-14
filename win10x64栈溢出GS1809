@@ -1,7 +1,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include"shellcode.h"
-//因为seh不在栈里 所以没办法覆盖seh 只能触发一下异常而不崩溃 也就是这个漏洞无法利用 有兴趣的可以试试
+//因为手动设置的seh在局部变量上面 所以没办法覆盖seh 只能触发一下异常而不崩溃 也就是这个漏洞无法利用 有兴趣的可以试试
 HANDLE hDriver;
 DWORD dwBytesOut = 0;
 typedef enum _SYSTEM_INFORMATION_CLASS {
