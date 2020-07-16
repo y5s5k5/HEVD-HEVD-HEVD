@@ -1,3 +1,4 @@
+//进程退出会卡死而不是蓝屏 原因暂时未知，暂时没有解决的意思
 #include <windows.h>
 #include <stdio.h>
 #include <Psapi.h>
